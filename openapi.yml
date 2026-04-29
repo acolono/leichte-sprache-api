@@ -1,0 +1,630 @@
+openapi: 3.0.2
+info:
+  title: Leichte Sprache API
+  description: REST-API für die Generierung und Umwandlung von Texten in Leichte Sprache und Analyse von deutschen Texten auf Leichte-Sprache-Konformität
+  version: 1.0.0
+  contact:
+    name: API Support
+  license:
+    name: CC BY-SA 4.0
+
+servers:
+  - url: http://localhost:8000
+    description: Development server
+  - url: https://api.leichte-sprache.example.com
+    description: Production server
+
+paths:
+  /analyse:
+    post:
+      summary: Text auf Leichte Sprache analysieren
+      description: |
+        Analysiert einen deutschen Text auf Konformität mit Leichte-Sprache-Regeln.
+
+        Der Endpunkt wendet automatisch alle verfügbaren Regeln an und gibt eine
+        detaillierte Analyse zurück, einschließlich:
+        - Annotiertem Text mit Markierungen problematischer Stellen
+        - Statistiken über gefundene Verstöße
+        - Detaillierte Liste aller Issues mit Verbesserungsvorschlägen
+
+        **Format-Parameter:**
+        - Ohne Parameter oder `format=full`: Vollständige JSON-Response
+        - `format=annotated_text`: Nur annotierter Text zurückgeben
+      parameters:
+        - name: format
+          in: query
+          description: Ausgabeformat für die Response
+          required: false
+          schema:
+            type: string
+            enum: [full, annotated_text]
+            default: full
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyseRequest'
+            examples:
+              simple_text:
+                summary: Einfacher Text
+                value:
+                  text: "Die komplexe Administration mit dem \"Anderen\" Text."
+              complex_text:
+                summary: Komplexer Text
+                value:
+                  text: "Die Verwaltung organisiert eine außerordentliche Veranstaltung für alle Bürgerinnen und Bürger."
+      responses:
+        '200':
+          description: Erfolgreiche Analyse des Textes
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AnalyseResponse'
+                  - $ref: '#/components/schemas/AnnotatedTextResponse'
+              examples:
+                full_response:
+                  summary: Vollständige Analyse
+                  value:
+                    annotated_text: "Die komplexe[regel_fremdwoerter_issue: Fremdwort ersetzen] Administration..."
+                    statistics:
+                      total_violations: 3
+                      unique_violations: 2
+                      violations_by_rule:
+                        regel_fremdwoerter: 2
+                        regel_satzlaenge: 1
+                    issues:
+                      - rule_id: "regel_fremdwoerter_issue"
+                        text: "Administration"
+                        message: "Möglicherweise Fremdwort - durch deutsches Wort ersetzen oder erklären."
+                        start: 4
+                        end: 18
+                annotated_only:
+                  summary: Nur annotierter Text
+                  value:
+                    annotated_text: "Die komplexe[regel_fremdwoerter_issue: Fremdwort ersetzen] Administration..."
+        '400':
+          description: Ungültige Anfrage (leerer Text)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Serverfehler bei der Analyse
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /generate:
+    post:
+      summary: Text in Leichte Sprache umwandeln
+      description: |
+        Wandelt einen deutschen Text automatisch in Leichte Sprache um.
+
+        Der Endpunkt verwendet ein LLM zusammen mit dem Leichte-Sprache-Regelwerk,
+        um den Text iterativ zu verbessern, bis die Ziel-Anzahl an Verstößen erreicht ist.
+
+        **Unterstützte Provider:**
+        - `openai` (Standard): Erfordert OPENAI_API_KEY Umgebungsvariable
+        - `google` (Gemini): Erfordert GOOGLE_API_KEY oder GEMINI_API_KEY Umgebungsvariable
+        - `ollama` (lokal): Erfordert lokal laufenden Ollama-Server
+        - `mistral`: Erfordert MISTRAL_API_KEY Umgebungsvariable
+        - `anthropic`: Erfordert ANTHROPIC_API_KEY Umgebungsvariable
+
+        **Eskalations-Strategien:**
+        Wenn keine Verbesserung mehr erzielt wird, eskaliert das System automatisch:
+        - Level 0 (Normal): Alle Regeln, Standard-Temperatur
+        - Level 1 (Fokussiert): Top 5 priorisierte Verstöße
+        - Level 2 (Hohe Temperatur): Kreativere Lösungen (Temp 0.9)
+        - Level 3 (Regel-für-Regel): Fokus auf eine Regel-Kategorie
+
+        **Hinweis:** Die Generierung kann je nach Textlänge und Modell einige Sekunden dauern.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+            examples:
+              simple_generation:
+                summary: Einfache Textgenerierung
+                value:
+                  text: "Die 4m breite Feuerwehrzufahrt sowie der Reversierplatz für das Feuerwehrfahrzeug sind in jedem Fall freizuhalten."
+                  max_iterations: 10
+                  target_violations: 2
+                  provider: "openai"
+              with_model:
+                summary: Mit spezifischem Modell
+                value:
+                  text: "Die Verwaltung organisiert eine außerordentliche Veranstaltung."
+                  max_iterations: 15
+                  target_violations: 0
+                  provider: "openai"
+                  model: "gpt-4o-mini"
+                  debug: "DEBUG"
+      responses:
+        '200':
+          description: Erfolgreiche Generierung von Leichter Sprache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResponse'
+              example:
+                original: "Die 4m breite Feuerwehrzufahrt sowie der Reversierplatz für das Feuerwehrfahrzeug sind in jedem Fall freizuhalten."
+                result: "Die Zufahrt für die Feuerwehr ist 4 Meter breit. Halten Sie die Zufahrt immer frei."
+                success: true
+                iterations: 3
+                final_violations: 1
+                final_escalation_level: 0
+                hix: 18.5
+                hix_rating: "simple"
+                faithfulness_score: 4
+                stop_reason: "target_reached"
+                iterations_detail:
+                  - iteration: 1
+                    text: "Die Feuerwehr-Zufahrt ist 4 Meter breit..."
+                    violations: 5
+                  - iteration: 2
+                    text: "Die Zufahrt für die Feuerwehr ist 4 Meter breit..."
+                    violations: 2
+                  - iteration: 3
+                    text: "Die Zufahrt für die Feuerwehr ist 4 Meter breit. Halten Sie die Zufahrt immer frei."
+                    violations: 1
+                provider: "openai"
+                model: "gpt-4o"
+        '400':
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Generator nicht verfügbar
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missing_api_key:
+                  summary: Fehlender API Key
+                  value:
+                    error: "OpenAI nicht verfügbar: OPENAI_API_KEY nicht gesetzt."
+                missing_package:
+                  summary: Fehlendes Package
+                  value:
+                    error: "Ollama nicht verfügbar: ollama Package nicht installiert. Run: pip install ollama"
+        '500':
+          description: Serverfehler bei der Generierung
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      summary: Health Check
+      description: Überprüft den Status der API und der Dependencies
+      responses:
+        '200':
+          description: Erfolgreiche Gesundheitsprüfung
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, unhealthy]
+                  service:
+                    type: string
+                  version:
+                    type: string
+                  error:
+                    type: string
+              examples:
+                healthy:
+                  summary: Gesunder Service
+                  value:
+                    status: "healthy"
+                    service: "Leichte Sprache API"
+                    version: "1.0.0"
+                unhealthy:
+                  summary: Ungesunder Service
+                  value:
+                    status: "unhealthy"
+                    error: "Service-Test fehlgeschlagen: Connection error"
+
+  /info:
+    get:
+      summary: API Information
+      description: Informationen über verfügbare Regeln und System-Status
+      responses:
+        '200':
+          description: API-Informationen
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_name:
+                    type: string
+                  version:
+                    type: string
+                  description:
+                    type: string
+                  endpoints:
+                    type: object
+                    additionalProperties:
+                      type: string
+                  verfuegbare_regeln:
+                    oneOf:
+                      - type: array
+                        items:
+                          type: string
+                      - type: string
+                  format_optionen:
+                    type: object
+                    properties:
+                      full:
+                        type: string
+                      annotated_text:
+                        type: string
+                  generator:
+                    type: object
+                    properties:
+                      verfuegbar:
+                        type: boolean
+                      regeln_geladen:
+                        type: integer
+                      provider:
+                        type: object
+                        additionalProperties:
+                          type: object
+                      hinweis:
+                        type: string
+              example:
+                api_name: "Leichte Sprache API"
+                version: "1.0.0"
+                description: "REST-API für die Analyse und Generierung deutscher Texte in Leichter Sprache"
+                endpoints:
+                  "/analyse": "POST - Textanalyse auf Leichte-Sprache-Konformität"
+                  "/generate": "POST - Automatische Umwandlung in Leichte Sprache (benötigt OPENAI_API_KEY)"
+                  "/health": "GET - Health Check"
+                  "/info": "GET - API-Informationen"
+                  "/docs": "GET - Interactive API Documentation (Swagger UI)"
+                  "/redoc": "GET - Alternative API Documentation"
+                verfuegbare_regeln:
+                  - "regel_fremdwoerter"
+                  - "regel_satzlaenge"
+                  - "regel_komposita"
+                format_optionen:
+                  full: "Vollständige Analyse mit Statistics und Issues"
+                  annotated_text: "Nur annotierter Text"
+                generator:
+                  verfuegbar: true
+                  regeln_geladen: 18
+                  provider:
+                    openai:
+                      verfuegbar: true
+                      modelle: ["gpt-4o", "gpt-4o-mini"]
+                      standard: "gpt-4o"
+                    ollama:
+                      verfuegbar: true
+                      modelle: ["mistral-nemo:12b", "llama3:8b"]
+                      standard: "mistral-nemo:12b"
+                      hinweis: "Erfordert lokal laufenden Ollama-Server"
+                  hinweis: "Wählen Sie Provider und Modell im /generate Endpunkt"
+
+  /help/json-escaping:
+    get:
+      summary: Hilfe für JSON-Escaping
+      description: Zeigt wie Texte mit Anführungszeichen korrekt formatiert werden
+      responses:
+        '200':
+          description: JSON-Escaping Hilfe
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title:
+                    type: string
+                  problem:
+                    type: string
+                  solution:
+                    type: string
+                  examples:
+                    type: object
+                  swagger_ui_tipp:
+                    type: string
+                  test_endpoints:
+                    type: array
+                    items:
+                      type: string
+              example:
+                title: "JSON-Escaping Hilfe"
+                problem: "Anführungszeichen in Texten können JSON-Parsing-Fehler verursachen"
+                solution: "Alle Anführungszeichen im Text müssen escaped werden"
+                examples:
+                  falsch:
+                    text: 'Text mit "Anführungszeichen" - FEHLER!'
+                    problem: "Unescaped quotes brechen JSON-Struktur"
+                  richtig:
+                    text: 'Text mit \"Anführungszeichen\" - KORREKT!'
+                    explanation: "Backslash vor Anführungszeichen escapt sie"
+                swagger_ui_tipp: "In der Swagger UI werden Anführungszeichen automatisch escaped - einfach normal eingeben!"
+                test_endpoints: ["/analyse?format=full", "/analyse?format=annotated_text"]
+
+components:
+  schemas:
+    AnalyseRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: 'Der zu analysierende deutsche Text. WICHTIG: Anführungszeichen im Text müssen als \" escaped werden!'
+          minLength: 0
+          maxLength: 50000
+          example: 'Die komplexe Administration mit dem "Anderen" Text.'
+
+    ViolationStatistics:
+      type: object
+      required:
+        - total_violations
+        - unique_violations
+        - violations_by_rule
+      properties:
+        total_violations:
+          type: integer
+          description: Gesamtanzahl aller gefundenen Verstöße
+          minimum: 0
+        unique_violations:
+          type: integer
+          description: Anzahl eindeutiger Verstöße (dedupliziert)
+          minimum: 0
+        violations_by_rule:
+          type: object
+          description: Anzahl Verstöße pro Regel
+          additionalProperties:
+            type: integer
+            minimum: 0
+          example:
+            regel_fremdwoerter: 3
+            regel_satzlaenge: 2
+
+    Issue:
+      type: object
+      required:
+        - rule_id
+        - text
+        - message
+      properties:
+        rule_id:
+          type: string
+          description: ID der Regel die den Verstoß gefunden hat
+          example: "regel_fremdwoerter_issue"
+        text:
+          type: string
+          description: Der problematische Text/Begriff
+          example: "Administration"
+        message:
+          type: string
+          description: Beschreibung des Problems mit Verbesserungsvorschlag
+          example: "Möglicherweise Fremdwort - durch deutsches Wort ersetzen oder erklären."
+        start:
+          type: integer
+          description: Start-Position des Fehlers im Original-Text (Character offset, 0-basiert)
+          nullable: true
+          minimum: 0
+          example: 4
+        end:
+          type: integer
+          description: End-Position des Fehlers im Original-Text (Character offset, 0-basiert, exklusiv)
+          nullable: true
+          minimum: 0
+          example: 18
+
+    AnalyseResponse:
+      type: object
+      required:
+        - annotated_text
+        - statistics
+        - issues
+      properties:
+        annotated_text:
+          type: string
+          description: Der ursprüngliche Text mit Markierungen für problematische Stellen
+          example: "Die komplexe[regel_fremdwoerter_issue: Fremdwort ersetzen] Administration..."
+        statistics:
+          $ref: '#/components/schemas/ViolationStatistics'
+        issues:
+          type: array
+          description: Liste aller gefundenen Verstöße mit Details
+          items:
+            $ref: '#/components/schemas/Issue'
+
+    AnnotatedTextResponse:
+      type: object
+      required:
+        - annotated_text
+      properties:
+        annotated_text:
+          type: string
+          description: Der ursprüngliche Text mit Markierungen für problematische Stellen
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Beschreibung des aufgetretenen Fehlers
+
+    GenerateRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Der zu transformierende deutsche Text
+          minLength: 1
+          maxLength: 10000
+          example: "Die 4m breite Feuerwehrzufahrt sowie der Reversierplatz für das Feuerwehrfahrzeug sind in jedem Fall freizuhalten."
+        max_iterations:
+          type: integer
+          description: Maximale Anzahl an Iterationen für die Verbesserung. Mit Escalation-Strategien werden mehr Iterationen empfohlen.
+          minimum: 1
+          maximum: 15
+          default: 10
+        target_violations:
+          type: integer
+          description: Ziel-Anzahl an Verstößen, bei der die Generierung stoppt
+          minimum: 0
+          maximum: 10
+          default: 2
+        provider:
+          type: string
+          description: "LLM-Provider: 'openai' (Standard), 'google' (Gemini), 'ollama' (lokal), 'mistral' oder 'anthropic'"
+          enum: [openai, google, ollama, mistral, anthropic]
+          default: "openai"
+          example: "openai"
+        model:
+          type: string
+          description: "LLM-Modell (z.B. 'gpt-4o-mini' für OpenAI, 'gemini-3-flash' für Google)"
+          nullable: true
+          example: "gpt-4o-mini"
+        debug:
+          type: string
+          description: "Log-Level: INFO (Standard), WARN (nur Warnungen), DEBUG (Details)"
+          enum: [INFO, WARN, DEBUG]
+          default: "INFO"
+
+    IterationDetail:
+      type: object
+      required:
+        - iteration
+        - text
+        - violations
+      properties:
+        iteration:
+          type: integer
+          description: Nummer der Iteration (1-basiert)
+          minimum: 1
+        text:
+          type: string
+          description: Generierter Text in dieser Iteration
+        violations:
+          type: integer
+          description: Anzahl Verstöße nach dieser Iteration
+          minimum: 0
+
+    GenerateResponse:
+      type: object
+      required:
+        - original
+        - result
+        - success
+        - iterations
+        - final_violations
+        - final_escalation_level
+        - iterations_detail
+        - provider
+        - model
+      properties:
+        original:
+          type: string
+          description: Original-Eingabetext
+        result:
+          type: string
+          description: Generierter Text in Leichter Sprache
+          example: "Die Zufahrt für die Feuerwehr ist 4 Meter breit. Halten Sie die Zufahrt immer frei."
+        success:
+          type: boolean
+          description: True wenn Ziel-Anzahl Verstöße erreicht wurde
+        iterations:
+          type: integer
+          description: Anzahl durchgeführter Iterationen
+          minimum: 0
+        final_violations:
+          type: integer
+          description: Anzahl verbleibender Verstöße im Ergebnis
+          minimum: 0
+        final_escalation_level:
+          type: integer
+          description: "Endgültige Eskalationsstufe (0=Normal, 1=Fokussiert, 2=Hohe Temperatur, 3=Regel-für-Regel)"
+          minimum: 0
+          maximum: 3
+          default: 0
+        hix:
+          type: number
+          description: "HIX-Score (Hohenheimer Verständlichkeitsindex, 0-20). 0=Fachsprache, 18-20=Leichte Sprache."
+          nullable: true
+          minimum: 0
+          maximum: 20
+        hix_rating:
+          type: string
+          description: "HIX-Bewertungskategorie: expert, complex, readable, plain, simple, easy"
+          nullable: true
+          enum: [expert, complex, readable, plain, simple, easy]
+        faithfulness_score:
+          type: integer
+          description: "Semantische Treue zum Original (1-5). 5=perfekt treu, 4=weitgehend treu (minimale Auslassungen), 3=teilweise treu (wichtige Info fehlt), 2=schwach treu (erhebliche Änderungen), 1=nicht treu. Bewertet durch separaten LLM-Richter."
+          nullable: true
+          minimum: 1
+          maximum: 5
+          example: 4
+        stop_reason:
+          type: string
+          description: "Grund für das Ende der Iteration: 'target_reached' (Ziel erreicht), 'stagnation' (keine Verbesserung), 'faithfulness_limit' (Treue-Limit erreicht)"
+          nullable: true
+          enum: [target_reached, stagnation, faithfulness_limit]
+          example: "target_reached"
+        iterations_detail:
+          type: array
+          description: Details zu jeder Iteration
+          items:
+            $ref: '#/components/schemas/IterationDetail'
+        provider:
+          type: string
+          description: Verwendeter LLM-Provider
+          example: "openai"
+        model:
+          type: string
+          description: Verwendetes LLM-Modell
+          example: "gpt-4o"
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Optional API key for rate limiting (if implemented)
+
+security:
+  - {}
+  - BearerAuth: []
+
+tags:
+  - name: analysis
+    description: Textanalyse-Endpunkte
+  - name: generation
+    description: Textgenerierung-Endpunkte
+  - name: system
+    description: System- und Status-Endpunkte
+  - name: help
+    description: Hilfe-Endpunkte
+
+x-tagGroups:
+  - name: Core API
+    tags:
+      - analysis
+      - generation
+  - name: System
+    tags:
+      - system
+      - help
